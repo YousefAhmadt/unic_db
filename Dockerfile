@@ -7,7 +7,7 @@ RUN dart pub get
 
 COPY . .
 
-RUN dart compile exe bin/server.dart -o server
+RUN dart compile exe server.dart -o server
 
 EXPOSE 8080
 
