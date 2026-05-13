@@ -1,0 +1,657 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:postgres/postgres.dart';
+import 'package:shelf/shelf.dart';
+
+import '../ai/gemini_api_service.dart';
+
+class Dashboard_Stats {
+  final Connection connection;
+
+  Dashboard_Stats({
+    required this.connection,
+  });
+
+  // =========================
+  // Helpers
+  // =========================
+
+  double parseDouble(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? 0.0;
+  }
+
+  int parseInt(dynamic value) {
+    if (value == null) return 0;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString()) ?? 0;
+  }
+
+  List<String> parseStringList(dynamic value) {
+    if (value == null) return [];
+
+    if (value is List) {
+      return value.map((e) => e.toString()).toList();
+    }
+
+    if (value is String) {
+      try {
+        final decoded = jsonDecode(value);
+        if (decoded is List) {
+          return decoded.map((e) => e.toString()).toList();
+        }
+      } catch (_) {}
+
+      if (value.trim().isEmpty) return [];
+      return value
+          .split(',')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+    }
+
+    return [];
+  }
+
+  // =========================
+  // Student Grades
+  // =========================
+
+  Future<Map<String, double>> getStudentGrades(String studentId) async {
+    final res = await connection.execute(
+      Sql.named('''
+        SELECT course_id, grade
+        FROM student_grades
+        WHERE student_id = @sid
+        ORDER BY created_at ASC
+      '''),
+      parameters: {'sid': studentId},
+    );
+
+    final Map<String, double> grades = {};
+
+    for (final row in res) {
+      final map = row.toColumnMap();
+      grades[map['course_id'].toString()] = parseDouble(map['grade']);
+    }
+
+    return grades;
+  }
+
+  // =========================
+  // Course Relations
+  // =========================
+
+  Future<Map<String, List<String>>> getCourseRelations() async {
+    final res = await connection.execute('''
+      SELECT course_id, prerequisite_id
+      FROM course_prerequisites
+    ''');
+
+    final Map<String, List<String>> relations = {};
+
+    for (final row in res) {
+      final courseId = row[0].toString();
+      final prereqId = row[1].toString();
+
+      relations.putIfAbsent(courseId, () => []).add(prereqId);
+    }
+
+    return relations;
+  }
+
+  // =========================
+  // Weighted Prerequisites Score
+  // =========================
+
+  double weightedPrereqScore({
+    required String courseId,
+    required Map<String, double> grades,
+    required Map<String, List<String>> relations,
+  }) {
+    if (!relations.containsKey(courseId)) return 2.5;
+
+    final prereqs = relations[courseId]!;
+
+    double weightedSum = 0;
+    double totalWeight = 0;
+    double weight = prereqs.length.toDouble();
+
+    for (final prereqId in prereqs) {
+      if (grades.containsKey(prereqId)) {
+        weightedSum += grades[prereqId]! * weight;
+        totalWeight += weight;
+      }
+
+      weight--;
+    }
+
+    return totalWeight > 0 ? weightedSum / totalWeight : 2.5;
+  }
+
+  // =========================
+  // GPA Trend
+  // =========================
+
+  double calculateGpaTrend(Map<String, double> grades) {
+    if (grades.length < 2) return 0.0;
+
+    final values = grades.values.toList();
+
+    double totalChange = 0;
+
+    for (int i = 1; i < values.length; i++) {
+      totalChange += values[i] - values[i - 1];
+    }
+
+    return totalChange / (values.length - 1);
+  }
+
+  double calculateAvgGpa(Map<String, double> grades) {
+    if (grades.isEmpty) return 2.5;
+
+    return grades.values.reduce((a, b) => a + b) / grades.length;
+  }
+
+  // =========================
+  // Prediction
+  // =========================
+
+  double predictCourseGrade({
+    required String courseId,
+    required Map<String, double> grades,
+    required Map<String, List<String>> relations,
+  }) {
+    if (grades.isEmpty) return 2.5;
+
+    final prereqScore = weightedPrereqScore(
+      courseId: courseId,
+      grades: grades,
+      relations: relations,
+    );
+
+    final trend = calculateGpaTrend(grades);
+    final avgGpa = calculateAvgGpa(grades);
+
+    final gpaScore = (avgGpa + trend).clamp(0.0, 4.0);
+
+    final prediction = (prereqScore * 0.6) + (gpaScore * 0.4);
+
+    return double.parse(
+      prediction.clamp(0.0, 4.0).toStringAsFixed(2),
+    );
+  }
+
+  double calculateSuccessScore({
+    required double gpa,
+    required bool prerequisitesOk,
+    required int currentCredits,
+    required int maxCredits,
+  }) {
+    final gpaScore = gpa / 4.0;
+    final prereqScore = prerequisitesOk ? 1.0 : 0.0;
+    final loadScore = maxCredits == 0 ? 0.0 : 1 - (currentCredits / maxCredits);
+
+    return (0.5 * gpaScore) + (0.3 * prereqScore) + (0.2 * loadScore);
+  }
+
+  // =========================
+  // Active Semester
+  // =========================
+
+  Future<int> getActiveSemesterId() async {
+    final res = await connection.execute('''
+      SELECT id
+      FROM semesters
+      WHERE is_active = true
+      LIMIT 1;
+    ''');
+
+    if (res.isEmpty) return 1;
+
+    return parseInt(res.first[0]);
+  }
+
+  // =========================
+  // Bulk Course Schedules
+  // =========================
+
+  Future<Map<String, List<Map<String, dynamic>>>> getCoursesSchedulesBulk({
+    required List<String> courseIds,
+    required int semesterId,
+    String section = 'A',
+  }) async {
+    if (courseIds.isEmpty) return {};
+
+    final res = await connection.execute(
+      Sql.named('''
+        SELECT 
+          course_id,
+          section,
+          semester_id,
+          day,
+          start_time,
+          end_time,
+          room,
+          professor_id
+        FROM course_schedules
+        WHERE course_id = ANY(@courseIds)
+          AND semester_id = @semesterId
+          AND section = @section
+        ORDER BY 
+          course_id,
+          CASE day
+            WHEN 'Sunday' THEN 1
+            WHEN 'Monday' THEN 2
+            WHEN 'Tuesday' THEN 3
+            WHEN 'Wednesday' THEN 4
+            WHEN 'Thursday' THEN 5
+            WHEN 'Friday' THEN 6
+            WHEN 'Saturday' THEN 7
+            ELSE 8
+          END,
+          start_time;
+      '''),
+      parameters: {
+        'courseIds': courseIds,
+        'semesterId': semesterId,
+        'section': section,
+      },
+    );
+
+    final Map<String, List<Map<String, dynamic>>> schedulesByCourse = {};
+
+    for (final row in res) {
+      final map = row.toColumnMap();
+      final courseId = map['course_id'].toString();
+
+      schedulesByCourse.putIfAbsent(courseId, () => []).add({
+        'course_id': courseId,
+        'section': map['section']?.toString(),
+        'semester_id': parseInt(map['semester_id']),
+        'day': map['day']?.toString(),
+        'start_time': map['start_time']?.toString(),
+        'end_time': map['end_time']?.toString(),
+        'room': map['room']?.toString(),
+        'professor_id': map['professor_id']?.toString(),
+      });
+    }
+
+    return schedulesByCourse;
+  }
+
+  // =========================
+  // Time Conflict Checker
+  // =========================
+
+  bool hasTimeConflict({
+    required List<Map<String, dynamic>> selectedSchedules,
+    required List<Map<String, dynamic>> newSchedule,
+  }) {
+    for (final selected in selectedSchedules) {
+      for (final current in newSchedule) {
+        if (selected['day']?.toString() != current['day']?.toString()) {
+          continue;
+        }
+
+        final selectedStart = selected['start_time'].toString();
+        final selectedEnd = selected['end_time'].toString();
+
+        final currentStart = current['start_time'].toString();
+        final currentEnd = current['end_time'].toString();
+
+        final conflict =
+            currentStart.compareTo(selectedEnd) < 0 &&
+            currentEnd.compareTo(selectedStart) > 0;
+
+        if (conflict) return true;
+      }
+    }
+
+    return false;
+  }
+
+  // =========================
+  // Letter Grade
+  // =========================
+
+  String getLetterGrade(double predicted) {
+    if (predicted >= 3.7) return 'A';
+    if (predicted >= 3.3) return 'A-';
+    if (predicted >= 3.0) return 'B+';
+    if (predicted >= 2.7) return 'B';
+    if (predicted >= 2.3) return 'B-';
+    if (predicted >= 2.0) return 'C+';
+    if (predicted >= 1.7) return 'C';
+    return 'D';
+  }
+
+  // =========================
+  // Dashboard
+  // =========================
+
+  Future<Response> getDashboard(String studentId) async {
+    try {
+      if (studentId.isEmpty) {
+        return Response(
+          400,
+          body: jsonEncode({'error': 'student_id is required'}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+
+      final statsRes = await connection.execute(
+        Sql.named('''
+          SELECT s.*, m.name AS major_name
+          FROM student_stats s
+          LEFT JOIN majors m ON s.major_id = m.id
+          WHERE s.student_id = @id
+        '''),
+        parameters: {'id': studentId},
+      );
+
+      if (statsRes.isEmpty) {
+        return Response(
+          404,
+          body: jsonEncode({'error': 'Stats not found'}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+
+      final stats = statsRes.first.toColumnMap();
+
+      final gpa = parseDouble(stats['gpa']);
+      final earned = parseInt(stats['earned_credits']);
+      final total = parseInt(stats['total_credits']);
+      final majorId = parseInt(stats['major_id']);
+      final majorName = stats['major_name']?.toString() ?? 'Undeclared';
+
+      final activeSemesterId = await getActiveSemesterId();
+
+      late int numberOfRecommendations;
+      late int maxCredits;
+
+      if (gpa < 2.0) {
+        numberOfRecommendations = 4;
+        maxCredits = 12;
+      } else if (gpa >= 3.5) {
+        numberOfRecommendations = 6;
+        maxCredits = 18;
+      } else {
+        numberOfRecommendations = 5;
+        maxCredits = 15;
+      }
+
+      final completedRes = await connection.execute(
+        Sql.named('''
+          SELECT course_id
+          FROM student_course_status
+          WHERE student_id = @id
+            AND is_completed = true
+        '''),
+        parameters: {'id': studentId},
+      );
+
+      final completedIds = completedRes.map((r) => r[0].toString()).toSet();
+
+      final majorCoursesRes = await connection.execute(
+        Sql.named('''
+          SELECT DISTINCT ON (dp.course_id)
+            dp.course_id AS id,
+            c.title,
+            c.credits,
+            c.prerequisites,
+            COALESCE(cr.requirement_type, c.requirement_type) AS requirement_type,
+            dp.semester_number
+          FROM degree_plans dp
+          JOIN courses c 
+            ON c.id = dp.course_id
+          LEFT JOIN course_requirements cr
+            ON cr.course_id = c.id
+           AND cr.major_id = dp.major_id
+          WHERE dp.major_id = @mid
+            AND dp.course_id NOT IN (
+              SELECT course_id
+              FROM student_course_status
+              WHERE student_id = @sid
+                AND is_completed = true
+            )
+          ORDER BY dp.course_id, dp.semester_number ASC;
+        '''),
+        parameters: {
+          'mid': majorId,
+          'sid': studentId,
+        },
+      );
+
+      final grades = await getStudentGrades(studentId);
+      final relations = await getCourseRelations();
+
+      final courseIds = majorCoursesRes
+          .map((row) => row.toColumnMap()['id']?.toString())
+          .whereType<String>()
+          .toList();
+
+      final schedulesByCourse = await getCoursesSchedulesBulk(
+        courseIds: courseIds,
+        semesterId: activeSemesterId,
+        section: 'A',
+      );
+
+      final List<Map<String, dynamic>> availableCourses = [];
+
+      for (final row in majorCoursesRes) {
+        final course = row.toColumnMap();
+        final courseId = course['id']?.toString();
+
+        if (courseId == null) continue;
+
+        final prereqs = parseStringList(course['prerequisites']);
+        final prerequisitesOk = prereqs.every(
+          (p) => completedIds.contains(p),
+        );
+
+        if (!prerequisitesOk) continue;
+
+        final schedule = schedulesByCourse[courseId] ?? [];
+
+        if (schedule.isEmpty) continue;
+
+        final predicted = predictCourseGrade(
+          courseId: courseId,
+          grades: grades,
+          relations: relations,
+        );
+
+        final successScore = calculateSuccessScore(
+          gpa: gpa,
+          prerequisitesOk: true,
+          currentCredits: 0,
+          maxCredits: maxCredits,
+        );
+
+        availableCourses.add({
+          'title': course['title']?.toString() ?? '',
+          'code': courseId,
+          'credits': parseInt(course['credits']),
+          'requirement_type':
+              course['requirement_type']?.toString() ?? 'major_required',
+          'success_score': (successScore * 100).toStringAsFixed(1),
+          'predicted_gpa': predicted.toString(),
+          'predicted_letter': getLetterGrade(predicted),
+          'section': 'A',
+          'semester_id': activeSemesterId,
+          'schedule': schedule,
+        });
+      }
+
+      availableCourses.sort(
+        (a, b) => parseDouble(b['predicted_gpa']).compareTo(
+          parseDouble(a['predicted_gpa']),
+        ),
+      );
+
+      final List<Map<String, dynamic>> finalRecommendations = [];
+
+      final payload = {
+        'student': {
+          'gpa': gpa,
+          'earnedCredits': earned,
+          'totalCredits': total,
+          'maxCredits': maxCredits,
+          'major': majorName,
+          'activeSemesterId': activeSemesterId,
+        },
+        'rules': {
+          'maxCredits': maxCredits,
+          'maxRecommendations': numberOfRecommendations,
+          'important':
+              'Choose only from availableCourses. Do not create new courses. Return course IDs only. Do not change schedules. Prefer higher predicted_gpa and no time conflicts.',
+        },
+        'completedCourses': completedIds.toList(),
+        'availableCourses': availableCourses.map((c) {
+          return {
+            'id': c['code'],
+            'title': c['title'],
+            'credits': c['credits'],
+            'requirement_type': c['requirement_type'],
+            'success_score': parseDouble(c['success_score']),
+            'predicted_gpa': parseDouble(c['predicted_gpa']),
+            'predicted_letter': c['predicted_letter'],
+            'section': c['section'],
+            'semester_id': c['semester_id'],
+            'schedule': c['schedule'],
+          };
+        }).toList(),
+      };
+
+      // =========================
+      // Gemini Recommendations
+      // =========================
+
+      try {
+        final aiResult = await GeminiApiService()
+            .callGemini(payload)
+            .timeout(const Duration(seconds: 5));
+
+        final aiCourses = List<Map<String, dynamic>>.from(
+          aiResult['recommendedCourses'] ?? [],
+        );
+
+        final localByCode = {
+          for (final c in availableCourses) c['code'].toString(): c,
+        };
+
+        final safeSchedules = <Map<String, dynamic>>[];
+        int safeCredits = 0;
+
+        for (final aiCourse in aiCourses) {
+          final code =
+              aiCourse['id']?.toString() ?? aiCourse['code']?.toString();
+
+          if (code == null) continue;
+          if (!localByCode.containsKey(code)) continue;
+
+          final localCourse = localByCode[code]!;
+          final credits = parseInt(localCourse['credits']);
+
+          if (safeCredits + credits > maxCredits) continue;
+
+          final schedule = List<Map<String, dynamic>>.from(
+            localCourse['schedule'] ?? [],
+          );
+
+          final conflict = hasTimeConflict(
+            selectedSchedules: safeSchedules,
+            newSchedule: schedule,
+          );
+
+          if (conflict) continue;
+
+          safeSchedules.addAll(schedule);
+          safeCredits += credits;
+
+          finalRecommendations.add({
+            ...localCourse,
+            'ai_reason': aiCourse['reason'] ?? aiCourse['why'] ?? '',
+          });
+
+          if (finalRecommendations.length >= numberOfRecommendations) {
+            break;
+          }
+        }
+      } on TimeoutException {
+        print('Gemini timeout, using local recommendations');
+      } catch (e) {
+        print('Gemini failed, using local recommendations: $e');
+      }
+
+      // =========================
+      // Local Fallback Recommendations
+      // =========================
+
+      if (finalRecommendations.isEmpty) {
+        final safeSchedules = <Map<String, dynamic>>[];
+        int safeCredits = 0;
+
+        for (final course in availableCourses) {
+          final credits = parseInt(course['credits']);
+
+          if (safeCredits + credits > maxCredits) continue;
+
+          final schedule = List<Map<String, dynamic>>.from(
+            course['schedule'] ?? [],
+          );
+
+          final conflict = hasTimeConflict(
+            selectedSchedules: safeSchedules,
+            newSchedule: schedule,
+          );
+
+          if (conflict) continue;
+
+          safeSchedules.addAll(schedule);
+          safeCredits += credits;
+
+          finalRecommendations.add(course);
+
+          if (finalRecommendations.length >= numberOfRecommendations) {
+            break;
+          }
+        }
+      }
+
+      final selectedCredits = finalRecommendations.fold<int>(
+        0,
+        (sum, c) => sum + parseInt(c['credits']),
+      );
+
+      final remaining = (total - earned).clamp(0, total);
+
+      return Response.ok(
+        jsonEncode({
+          'gpa': gpa,
+          'earnedCredits': earned,
+          'totalCredits': total,
+          'remainingCredits': remaining,
+          'majorName': majorName,
+          'activeSemesterId': activeSemesterId,
+          'maxCredits': maxCredits,
+          'selectedCredits': selectedCredits,
+          'completedCourses': completedIds.toList(),
+          'recommendations': finalRecommendations,
+        }),
+        headers: {'Content-Type': 'application/json'},
+      );
+    } catch (e, stack) {
+      print('DASHBOARD ERROR: $e\n$stack');
+
+      return Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
+        headers: {'Content-Type': 'application/json'},
+      );
+    }
+  }
+}

@@ -1,0 +1,1017 @@
+import 'package:postgres/postgres.dart';
+
+class SetupDatabase {
+  final Connection connection;
+
+  SetupDatabase(this.connection);
+
+  // =========================
+  // 1. USERS
+  // =========================
+  Future<void> created_user() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(20) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        role VARCHAR(30) NOT NULL,
+        profile_image_url TEXT
+      );
+    ''');
+  }
+
+  // =========================
+  // 2. MAJORS
+  // =========================
+  Future<void> created_majors() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS majors (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        total_credits INT DEFAULT 132
+      );
+    ''');
+  }
+
+  // =========================
+  // 3. COURSES
+  // =========================
+  Future<void> created_courses() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS courses (
+        id VARCHAR(20) PRIMARY KEY,
+        title VARCHAR(200) NOT NULL,
+        description TEXT,
+        credits INT NOT NULL,
+        prerequisites TEXT[] DEFAULT '{}',
+        requirement_type VARCHAR(30) NOT NULL DEFAULT 'major_required'
+      );
+    ''');
+  }
+
+  Future<void> created_course_majors() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS course_majors (
+        id SERIAL PRIMARY KEY,
+        course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+        major_id INT REFERENCES majors(id) ON DELETE CASCADE,
+        UNIQUE(course_id, major_id)
+      );
+    ''');
+  }
+
+  // =========================
+  // 4. DEGREE PLAN
+  // =========================
+  Future<void> created_degree_plans() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS degree_plans (
+        id SERIAL PRIMARY KEY,
+        major_id INT REFERENCES majors(id) ON DELETE CASCADE,
+        course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+        semester_number INT NOT NULL,
+        is_mandatory BOOLEAN DEFAULT TRUE
+      );
+    ''');
+  }
+
+  // =========================
+  // 5. COURSE PREREQUISITES TABLE
+  // =========================
+  Future<void> course_prerequisites() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS course_prerequisites (
+        course_id TEXT,
+        prerequisite_id TEXT,
+        PRIMARY KEY (course_id, prerequisite_id)
+      );
+    ''');
+  }
+
+  // =========================
+  // 6. STUDENT STATUS
+  // =========================
+  Future<void> created_student_course_status() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS student_course_status (
+        student_id VARCHAR(20) REFERENCES users(id) ON DELETE CASCADE,
+        course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+        is_completed BOOLEAN DEFAULT FALSE,
+        PRIMARY KEY (student_id, course_id)
+      );
+    ''');
+  }
+
+  // =========================
+  // 7. STUDENT STATS
+  // =========================
+  Future<void> created_student_stats() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS student_stats (
+        student_id VARCHAR(20) PRIMARY KEY,
+        gpa DECIMAL(3,2),
+        earned_credits INT,
+        total_credits INT,
+        major_id INT
+      );
+    ''');
+  }
+
+  // =========================
+  // 8. REGISTRATIONS
+  // =========================
+Future<void> created_registration() async {
+  await connection.execute('''
+    CREATE TABLE IF NOT EXISTS registrations (
+      id SERIAL PRIMARY KEY,
+      student_id VARCHAR(20) REFERENCES users(id) ON DELETE CASCADE,
+      course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+      section VARCHAR(10) NOT NULL DEFAULT 'A',
+      semester_id INT REFERENCES semesters(id) ON DELETE CASCADE,
+      status VARCHAR(20) DEFAULT 'enrolled',
+      UNIQUE(student_id, course_id, section, semester_id)
+    );
+  ''');
+}
+
+  // =========================
+  // 9. TRIGGER (PREREQUISITES SYNC)
+  // =========================
+  Future<void> create_TRIGGER() async {
+
+    // 1️⃣ FUNCTION
+    await connection.execute(r'''
+      CREATE OR REPLACE FUNCTION sync_prerequisites()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF TG_OP = 'UPDATE'
+        AND OLD.prerequisites IS NOT DISTINCT FROM NEW.prerequisites THEN
+          RETURN NEW;
+        END IF;
+
+        DELETE FROM course_prerequisites WHERE course_id = NEW.id;
+
+        IF array_length(NEW.prerequisites, 1) IS NOT NULL THEN
+          INSERT INTO course_prerequisites (course_id, prerequisite_id)
+          SELECT NEW.id, unnest(NEW.prerequisites);
+        END IF;
+
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    ''');
+
+    // 2️⃣ DROP TRIGGER
+    await connection.execute('''
+      DROP TRIGGER IF EXISTS trg_sync_prerequisites ON courses;
+    ''');
+
+    // 3️⃣ CREATE TRIGGER
+    await connection.execute('''
+      CREATE TRIGGER trg_sync_prerequisites
+      AFTER INSERT OR UPDATE ON courses
+      FOR EACH ROW
+      EXECUTE FUNCTION sync_prerequisites();
+    ''');
+  }
+
+  Future<void> created_semester_plans() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS semester_plans (
+        id SERIAL PRIMARY KEY,
+        student_id VARCHAR(20) REFERENCES users(id) ON DELETE CASCADE,
+        courses_json TEXT NOT NULL,
+        status VARCHAR(20) DEFAULT 'pending',
+        advisor_notes TEXT,
+        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    ''');
+  }
+
+  Future<void> created_registration_rules() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS registration_rules (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(200) NOT NULL,
+        content TEXT NOT NULL,
+        deadline TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    ''');
+  }
+
+  Future<void> created_announcements() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS announcements (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(200) NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    ''');
+  }
+
+  Future<void> created_office_hours() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS office_hours (
+        id SERIAL PRIMARY KEY,
+        professor_id VARCHAR(20) REFERENCES users(id),
+        day VARCHAR(20),
+        time_range VARCHAR(100),
+        location VARCHAR(100)
+      );
+    ''');
+  }
+
+  // FIX: أضفنا IF NOT EXISTS
+  Future<void> created_student_grades() async {
+    await connection.execute('''
+      CREATE TABLE IF NOT EXISTS student_grades (
+        id SERIAL PRIMARY KEY,
+        student_id VARCHAR(20) REFERENCES users(id) ON DELETE CASCADE,
+        course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+        grade DECIMAL(3,2) NOT NULL,
+        semester VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    ''');
+  }
+Future<void> created_course_schedules() async {
+  await connection.execute('''
+    CREATE TABLE IF NOT EXISTS course_schedules (
+      id SERIAL PRIMARY KEY,
+      course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+      section VARCHAR(10) NOT NULL,
+      semester_id INT REFERENCES semesters(id) ON DELETE CASCADE,
+      day VARCHAR(20) NOT NULL,
+      start_time TIME NOT NULL,
+      end_time TIME NOT NULL,
+      room VARCHAR(50),
+      professor_id VARCHAR(20) REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE(course_id, section, semester_id, day, start_time)
+    );
+  ''');
+}
+Future<void> created_semesters() async {
+  await connection.execute('''
+    CREATE TABLE IF NOT EXISTS semesters (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(50) NOT NULL UNIQUE, -- Fall 2025 / Spring 2026
+      year INT NOT NULL,
+      term VARCHAR(20) NOT NULL, -- Fall, Spring, Summer
+      start_date DATE,
+      end_date DATE,
+      is_active BOOLEAN DEFAULT FALSE
+    );
+  ''');
+}
+Future<void> created_course_requirements() async {
+  await connection.execute('''
+    CREATE TABLE IF NOT EXISTS course_requirements (
+      id SERIAL PRIMARY KEY,
+      course_id VARCHAR(20) REFERENCES courses(id) ON DELETE CASCADE,
+      major_id INT REFERENCES majors(id) ON DELETE CASCADE,
+      requirement_type VARCHAR(30) NOT NULL,
+
+      UNIQUE(course_id, major_id, requirement_type)
+    );
+  ''');
+}
+Future<void> seedCourseSchedules() async {
+  final coursesResult = await connection.execute('''
+    SELECT id
+    FROM courses
+    ORDER BY id;
+  ''');
+
+  final sunTueThuSlots = [
+    ['08:00', '09:00'],
+    ['09:00', '10:00'],
+    ['10:00', '11:00'],
+    ['11:00', '12:00'],
+    ['12:00', '13:00'],
+  ];
+
+  final monWedSlots = [
+    ['08:30', '10:00'],
+    ['10:00', '11:30'],
+    ['11:30', '13:00'],
+    ['13:00', '14:30'],
+    ['14:30', '16:00'],
+  ];
+
+  int index = 0;
+
+  for (final row in coursesResult) {
+    final courseId = row[0].toString();
+
+    final slotA = sunTueThuSlots[index % sunTueThuSlots.length];
+    final slotB = monWedSlots[index % monWedSlots.length];
+
+    // Section A: Sunday + Tuesday + Thursday
+    for (final day in ['Sunday', 'Tuesday', 'Thursday']) {
+      await connection.execute(
+        Sql.named('''
+          INSERT INTO course_schedules
+          (course_id, section, semester_id, day, start_time, end_time, room, professor_id)
+          VALUES
+          (@courseId, 'A', 1, @day, @startTime, @endTime, @room, 'PROF001')
+          ON CONFLICT DO NOTHING;
+        '''),
+        parameters: {
+          'courseId': courseId,
+          'day': day,
+          'startTime': slotA[0],
+          'endTime': slotA[1],
+          'room': 'Room ${100 + index}',
+        },
+      );
+    }
+
+    // Section B: Monday + Wednesday
+    for (final day in ['Monday', 'Wednesday']) {
+      await connection.execute(
+        Sql.named('''
+          INSERT INTO course_schedules
+          (course_id, section, semester_id, day, start_time, end_time, room, professor_id)
+          VALUES
+          (@courseId, 'B', 1, @day, @startTime, @endTime, @room, 'PROF001')
+          ON CONFLICT DO NOTHING;
+        '''),
+        parameters: {
+          'courseId': courseId,
+          'day': day,
+          'startTime': slotB[0],
+          'endTime': slotB[1],
+          'room': 'Room ${200 + index}',
+        },
+      );
+    }
+
+    index++;
+  }
+}
+
+Future<void> seedCourses() async {
+// 3. COURSES
+// =========================
+await connection.execute('''
+  INSERT INTO courses (id, title, credits, prerequisites, requirement_type) VALUES
+
+  -- Computer Engineering - Major Required
+  ('CE101',  'Intro to Computer Engineering',   3,  '{}',       'major_required'),
+  ('CE102',  'Digital Logic Design',             3,  '{}',       'major_required'),
+  ('CE201',  'Computer Organization',            3,  '{CE102}',  'major_required'),
+  ('CE202',  'Microprocessors',                  3,  '{CE201}',  'major_required'),
+  ('CE301',  'Operating Systems',                3,  '{CE202}',  'major_required'),
+  ('CE302',  'Computer Networks',                3,  '{CE301}',  'major_required'),
+  ('CE401',  'Embedded Systems',                 3,  '{CE202}',  'major_required'),
+  ('CE402',  'VLSI Design',                      3,  '{CE102}',  'major_required'),
+  ('CE403',  'Capstone Project CE',              6,  '{CE401}',  'major_required'),
+  ('CE210',  'Signals and Systems',              3,  '{CE201}',  'major_required'),
+  ('CE220',  'Analog Electronics',               3,  '{CE102}',  'major_required'),
+  ('CE221',  'Digital Systems Design',           3,  '{CE102}',  'major_required'),
+  ('CE211',  'Discrete Mathematics for CE',      3,  '{}',       'major_required'),
+  ('CE310',  'Real-Time Systems',                3,  '{CE301}',  'major_required'),
+  ('CE311',  'Distributed Systems (CE)',         3,  '{CE302}',  'major_required'),
+  ('CE404',  'Advanced Capstone CE',             6,  '{CE403}',  'major_required'),
+
+  -- Computer Engineering - Major Elective
+  ('CE320',  'Network Security Basics',          3,  '{CE302}',  'major_elective'),
+  ('CE330',  'IoT Systems',                      3,  '{CE401}',  'major_elective'),
+  ('CE331',  'Robotics Fundamentals',            3,  '{CE401}',  'major_elective'),
+  ('CE500',  'Advanced Embedded Systems',        3,  '{CE330}',  'major_elective'),
+  ('CE510',  'AI Hardware Acceleration',         3,  '{CE330}',  'major_elective'),
+  ('CE511',  'Edge AI Systems',                  3,  '{CE401}',  'major_elective'),
+  ('CE501',  'Microcontroller Programming',      3,  '{CE401}',  'major_elective'),
+
+  -- Software Engineering - Major Required
+  ('SE101',     'Intro to Software Engineering',  3, '{}',       'major_required'),
+  ('SE102',     'Programming Fundamentals',        3, '{}',       'major_required'),
+  ('SE201',     'Requirements Engineering',        3, '{SE101}',  'major_required'),
+  ('SE202',     'Design Patterns',                 3, '{SE101}',  'major_required'),
+  ('SE301',     'Software Architecture',           3, '{SE202}',  'major_required'),
+  ('SE302',     'Web Development',                 3, '{SE102}',  'major_required'),
+  ('SE303',     'Software Testing & QA',           3, '{SE201}',  'major_required'),
+  ('SE304',     'DevOps & CI/CD',                  3, '{SE301}',  'major_required'),
+  ('SE401',     'Software Project Management',     3, '{SE303}',  'major_required'),
+  ('SE402',     'Capstone Project SE',             6, '{SE401}',  'major_required'),
+  ('SE110',     'Advanced Programming',            3, '{SE102}',  'major_required'),
+  ('SE111',     'Data Structures in Practice',     3, '{SE102}',  'major_required'),
+  ('SE320',     'Advanced Web Frameworks',         3, '{SE302}',  'major_required'),
+  ('SE340',     'Automation Testing',              3, '{SE303}',  'major_required'),
+  ('SE341',     'Software Metrics & Quality',      3, '{SE303}',  'major_required'),
+  ('SE410',     'Enterprise Software Project',     6, '{SE401}',  'major_required'),
+
+  -- Software Engineering - Major Elective
+  ('SE321',     'Mobile App Development',          3, '{SE302}',  'major_elective'),
+  ('SE350',     'Application Security',            3, '{SE304}',  'major_elective'),
+  ('SE360',     'AI for Software Engineering',     3, '{SE301}',  'major_elective'),
+  ('SEWEB1',    'Full Stack Development',          3, '{SE320}',  'major_elective'),
+  ('SEWEB2',    'Frontend Architecture',           3, '{SE320}',  'major_elective'),
+  ('SEMOB1',    'Flutter Advanced',                3, '{SE321}',  'major_elective'),
+  ('SEMOB2',    'Mobile Optimization',             3, '{SE321}',  'major_elective'),
+  ('SECLOUD1',  'Cloud Architecture',              3, '{SE304}',  'major_elective'),
+  ('SECLOUD2',  'DevOps Advanced',                 3, '{SE304}',  'major_elective'),
+  -- College Required - Shared CE + SE
+  ('MATH101', 'Calculus 1',         3, '{}',          'college_required'),
+  ('MATH102', 'Calculus 2',         3, '{MATH101}',   'college_required'),
+  ('CS101',   'Programming Basics', 3, '{}',          'college_required'),
+  ('CS201',   'Data Structures',    3, '{CS101}',     'college_required'),
+  ('CS302',   'Networks',           3, '{}',          'college_required');
+''');
+
+}
+Future<void> seedCourseDescriptions() async {
+  final courseDescriptions = <Map<String, String>>[
+    {
+      'id': 'CE101',
+      'description':
+          'Introduces the fundamentals of computer engineering, including hardware, software, and computing systems.'
+    },
+    {
+      'id': 'CE102',
+      'description':
+          'Covers digital logic concepts such as Boolean algebra, logic gates, and basic digital circuit design.'
+    },
+    {
+      'id': 'CE201',
+      'description':
+          'Explains computer organization concepts including CPU structure, memory systems, and instruction execution.'
+    },
+    {
+      'id': 'CE202',
+      'description':
+          'Introduces microprocessor architecture, assembly language, and interfacing with hardware components.'
+    },
+    {
+      'id': 'CE301',
+      'description':
+          'Covers operating system concepts such as processes, memory management, scheduling, and file systems.'
+    },
+    {
+      'id': 'CE302',
+      'description':
+          'Introduces computer network principles, communication protocols, routing, and network services.'
+    },
+    {
+      'id': 'CE401',
+      'description':
+          'Focuses on embedded system design, microcontrollers, sensors, and real-time hardware interaction.'
+    },
+    {
+      'id': 'CE402',
+      'description':
+          'Covers VLSI design principles, digital chip design, and hardware implementation techniques.'
+    },
+    {
+      'id': 'CE403',
+      'description':
+          'A senior project course where students design, implement, and present a complete computer engineering solution.'
+    },
+    {
+      'id': 'CE210',
+      'description':
+          'Introduces signal analysis, system behavior, frequency response, and basic signal processing concepts.'
+    },
+    {
+      'id': 'CE220',
+      'description':
+          'Covers analog electronic circuits, semiconductor devices, amplifiers, and circuit analysis techniques.'
+    },
+    {
+      'id': 'CE221',
+      'description':
+          'Focuses on designing digital systems using combinational and sequential logic components.'
+    },
+    {
+      'id': 'CE211',
+      'description':
+          'Covers discrete mathematics topics used in computer engineering such as logic, sets, relations, and graphs.'
+    },
+    {
+      'id': 'CE310',
+      'description':
+          'Explores real-time system concepts including timing constraints, scheduling, and embedded control.'
+    },
+    {
+      'id': 'CE311',
+      'description':
+          'Covers distributed computing concepts, communication between systems, synchronization, and fault tolerance.'
+    },
+    {
+      'id': 'CE404',
+      'description':
+          'An advanced continuation of the capstone project with deeper design, testing, and documentation.'
+    },
+    {
+      'id': 'CE320',
+      'description':
+          'Introduces basic network security concepts including threats, encryption, authentication, and secure protocols.'
+    },
+    {
+      'id': 'CE330',
+      'description':
+          'Covers Internet of Things systems, connected devices, sensors, communication, and IoT applications.'
+    },
+    {
+      'id': 'CE331',
+      'description':
+          'Introduces robotics concepts including sensors, actuators, control systems, and robotic movement.'
+    },
+    {
+      'id': 'CE500',
+      'description':
+          'Explores advanced embedded system topics including optimization, hardware integration, and system reliability.'
+    },
+    {
+      'id': 'CE510',
+      'description':
+          'Covers hardware acceleration for artificial intelligence using specialized processors and embedded platforms.'
+    },
+    {
+      'id': 'CE511',
+      'description':
+          'Focuses on deploying AI models on edge devices with attention to performance, memory, and power limits.'
+    },
+    {
+      'id': 'CE501',
+      'description':
+          'Covers microcontroller programming, peripheral control, embedded C, and hardware-level problem solving.'
+    },
+
+    {
+      'id': 'SE101',
+      'description':
+          'Introduces software engineering principles, development processes, software lifecycle, and team-based practices.'
+    },
+    {
+      'id': 'SE102',
+      'description':
+          'Covers programming basics including variables, control flow, functions, arrays, and problem solving.'
+    },
+    {
+      'id': 'SE201',
+      'description':
+          'Focuses on collecting, analyzing, documenting, and validating software requirements.'
+    },
+    {
+      'id': 'SE202',
+      'description':
+          'Introduces common software design patterns and reusable solutions for software design problems.'
+    },
+    {
+      'id': 'SE301',
+      'description':
+          'Covers software architecture styles, system structure, scalability, maintainability, and design decisions.'
+    },
+    {
+      'id': 'SE302',
+      'description':
+          'Introduces web development concepts including frontend, backend, APIs, and database integration.'
+    },
+    {
+      'id': 'SE303',
+      'description':
+          'Covers software testing, quality assurance, test planning, bug tracking, and validation techniques.'
+    },
+    {
+      'id': 'SE304',
+      'description':
+          'Introduces DevOps practices including CI/CD pipelines, automation, deployment, and monitoring.'
+    },
+    {
+      'id': 'SE401',
+      'description':
+          'Covers software project planning, scheduling, risk management, team coordination, and delivery.'
+    },
+    {
+      'id': 'SE402',
+      'description':
+          'A senior project course where students build and present a complete software engineering solution.'
+    },
+    {
+      'id': 'SE110',
+      'description':
+          'Develops advanced programming skills using structured code, object-oriented concepts, and problem solving.'
+    },
+    {
+      'id': 'SE111',
+      'description':
+          'Applies data structures such as lists, stacks, queues, trees, and maps in practical software problems.'
+    },
+    {
+      'id': 'SE320',
+      'description':
+          'Covers modern web frameworks, application structure, routing, state management, and backend integration.'
+    },
+    {
+      'id': 'SE340',
+      'description':
+          'Focuses on automated testing tools, test scripts, regression testing, and continuous testing practices.'
+    },
+    {
+      'id': 'SE341',
+      'description':
+          'Covers software quality metrics, code quality, maintainability, technical debt, and process improvement.'
+    },
+    {
+      'id': 'SE410',
+      'description':
+          'A large-scale software project course focused on enterprise requirements, architecture, and delivery.'
+    },
+    {
+      'id': 'SE321',
+      'description':
+          'Introduces mobile application development concepts, UI design, local storage, APIs, and deployment.'
+    },
+    {
+      'id': 'SE350',
+      'description':
+          'Covers application security principles including secure coding, authentication, authorization, and common vulnerabilities.'
+    },
+    {
+      'id': 'SE360',
+      'description':
+          'Explores the use of artificial intelligence to support software development, testing, analysis, and automation.'
+    },
+    {
+      'id': 'SEWEB1',
+      'description':
+          'Focuses on full stack development using frontend, backend, databases, APIs, and deployment workflows.'
+    },
+    {
+      'id': 'SEWEB2',
+      'description':
+          'Covers frontend architecture, component design, state management, performance, and scalable UI structure.'
+    },
+    {
+      'id': 'SEMOB1',
+      'description':
+          'Covers advanced Flutter topics including state management, architecture, animations, APIs, and performance.'
+    },
+    {
+      'id': 'SEMOB2',
+      'description':
+          'Focuses on mobile app optimization including performance tuning, memory usage, loading speed, and user experience.'
+    },
+    {
+      'id': 'SECLOUD1',
+      'description':
+          'Introduces cloud architecture concepts including services, deployment models, scalability, and reliability.'
+    },
+    {
+      'id': 'SECLOUD2',
+      'description':
+          'Covers advanced DevOps practices including infrastructure automation, containers, monitoring, and release management.'
+    },
+
+    {
+      'id': 'MATH101',
+      'description':
+          'Introduces calculus concepts including limits, derivatives, and applications of differentiation.'
+    },
+    {
+      'id': 'MATH102',
+      'description':
+          'Continues calculus with integration techniques, sequences, series, and mathematical applications.'
+    },
+    {
+      'id': 'CS101',
+      'description':
+          'Introduces basic programming concepts, algorithms, logic building, and computational problem solving.'
+    },
+    {
+      'id': 'CS201',
+      'description':
+          'Covers core data structures such as arrays, linked lists, stacks, queues, trees, and graphs.'
+    },
+    {
+      'id': 'CS302',
+      'description':
+          'Introduces computer networking concepts including protocols, network layers, addressing, and communication.'
+    },
+  ];
+
+  for (final course in courseDescriptions) {
+    await connection.execute(
+      Sql.named('''
+        UPDATE courses
+        SET description = @description
+        WHERE id = @id;
+      '''),
+      parameters: {
+        'id': course['id'],
+        'description': course['description'],
+      },
+    );
+  }
+}
+
+  // =========================
+  // CREATE SCHEMA
+  // =========================
+  Future<void> createSchema() async {
+    await created_user();
+    await created_majors();
+    await created_courses();
+    await created_course_majors();
+    await course_prerequisites();
+        await created_course_requirements();
+    await created_student_course_status();
+    await created_semesters();
+    await created_student_stats();
+    await created_degree_plans();
+    await created_registration();
+    await created_registration_rules();
+    await created_course_schedules();
+    await created_office_hours();
+    await created_announcements();
+    await created_semester_plans();
+    await created_student_grades();
+    await create_TRIGGER();
+
+  }
+
+  // =========================
+  // SEED DATA (FULL CLEAN)
+  // =========================
+  Future<void> seedData() async {
+    // FIX: أضفنا كل الجداول المفقودة من TRUNCATE
+await connection.execute('''
+  TRUNCATE TABLE
+    student_grades,
+    student_course_status,
+    student_stats,
+    semester_plans,
+    registrations,
+    course_schedules,
+    course_requirements,
+    degree_plans,
+    course_majors,
+    course_prerequisites,
+    courses,
+    majors,
+    users,
+    semesters
+  RESTART IDENTITY CASCADE;
+''');
+
+
+        // =========================
+    // 0. semesters
+    // =========================
+await connection.execute('''
+  INSERT INTO semesters (id, name, year, term, start_date, end_date, is_active) VALUES
+  (1, 'Spring 2026', 2026, 'Spring', '2026-02-01', '2026-06-15', true),
+  (2, 'Summer 2026', 2026, 'Summer', '2026-07-01', '2026-08-30', false),
+  (3, 'Fall 2026',   2026, 'Fall',   '2026-09-01', '2027-01-15', false);
+''');
+    // =========================
+    // 1. USERS
+    // =========================
+    await connection.execute('''
+      INSERT INTO users (id, name, email, password, role) VALUES
+      ('REG001',   'Registration Office', 'reg@uni.edu',   '123456',  'registrationOffice'),
+      ('PROF001',  'Dr. Ahmad',           'ahmad@uni.edu', '123456',  'professor'),
+      ('ADV001',   'Dr. Faisal',          'faisal@uni.edu','123456',  'advisor'),
+      ('ADMIN01',  'System Admin',        'admin@uni.edu', 'admin123','admin'),
+      ('20210001', 'John Doe',            'john@uni.edu',  '123456',  'student');
+      
+    ''');
+
+    // =========================
+    // 2. MAJORS
+    // =========================
+    await connection.execute('''
+      INSERT INTO majors (id, name, total_credits) VALUES
+      (1, 'Computer Engineering', 162),
+      (2, 'Software Engineering',  132);
+    ''');
+
+    // =========================
+    // 3. COURSES
+    // FIX: حذفنا عمود major_id — مش موجود في جدول courses
+    // =========================
+    await seedCourses();
+
+
+    // =========================
+    // 4. COURSE_MAJORS
+    // FIX: الجدول هاد كان فاضي — ملأناه بالكامل
+    // الكورسات المشتركة مربوطة بالتخصصين
+    // =========================
+    // =========================
+// 4. COURSE_MAJORS
+// =========================
+await connection.execute('''
+  INSERT INTO course_majors (course_id, major_id) VALUES
+
+  -- CE courses
+  ('CE101',  1), ('CE102',  1), ('CE201', 1), ('CE202', 1),
+  ('CE301',  1), ('CE302',  1), ('CE401', 1), ('CE402', 1),
+  ('CE403',  1), ('CE210',  1), ('CE220', 1), ('CE221', 1),
+  ('CE211',  1), ('CE310',  1), ('CE311', 1), ('CE320', 1),
+  ('CE330',  1), ('CE331',  1), ('CE404', 1), ('CE500', 1),
+  ('CE510',  1), ('CE511',  1), ('CE501', 1),
+
+  -- SE courses
+  ('SE101',    2), ('SE102',    2), ('SE201',    2), ('SE202',    2),
+  ('SE301',    2), ('SE302',    2), ('SE303',    2), ('SE304',    2),
+  ('SE401',    2), ('SE402',    2), ('SE110',    2), ('SE111',    2),
+  ('SE320',    2), ('SE321',    2), ('SE340',    2), ('SE341',    2),
+  ('SE350',    2), ('SE360',    2), ('SE410',    2), ('SEWEB1',   2),
+  ('SEWEB2',   2), ('SEMOB1',   2), ('SEMOB2',   2), ('SECLOUD1', 2),
+  ('SECLOUD2', 2),
+
+  -- College Shared
+  ('MATH101', 1), ('MATH101', 2),
+  ('MATH102', 1), ('MATH102', 2),
+  ('CS101',   1), ('CS101',   2),
+  ('CS201',   1), ('CS201',   2),
+  ('CS302',   1), ('CS302',   2);
+''');
+    
+await connection.execute('''
+  INSERT INTO course_requirements (course_id, major_id, requirement_type) VALUES
+
+  -- College requirements مشتركة بين CE و SE
+  ('MATH101', 1, 'college_required'),
+  ('MATH101', 2, 'college_required'),
+  ('MATH102', 1, 'college_required'),
+  ('MATH102', 2, 'college_required'),
+  ('CS101',   1, 'college_required'),
+  ('CS101',   2, 'college_required'),
+  ('CS201',   1, 'college_required'),
+  ('CS201',   2, 'college_required'),
+  ('CS302',   1, 'college_required'),
+  ('CS302',   2, 'college_required'),
+
+  -- CE Major Required
+  ('CE101', 1, 'major_required'),
+  ('CE102', 1, 'major_required'),
+  ('CE201', 1, 'major_required'),
+  ('CE202', 1, 'major_required'),
+  ('CE301', 1, 'major_required'),
+  ('CE302', 1, 'major_required'),
+  ('CE401', 1, 'major_required'),
+  ('CE402', 1, 'major_required'),
+  ('CE403', 1, 'major_required'),
+  ('CE210', 1, 'major_required'),
+  ('CE220', 1, 'major_required'),
+  ('CE221', 1, 'major_required'),
+  ('CE211', 1, 'major_required'),
+  ('CE310', 1, 'major_required'),
+  ('CE311', 1, 'major_required'),
+  ('CE404', 1, 'major_required'),
+
+  -- CE Major Elective
+  ('CE320', 1, 'major_elective'),
+  ('CE330', 1, 'major_elective'),
+  ('CE331', 1, 'major_elective'),
+  ('CE500', 1, 'major_elective'),
+  ('CE510', 1, 'major_elective'),
+  ('CE511', 1, 'major_elective'),
+  ('CE501', 1, 'major_elective'),
+
+  -- SE Major Required
+  ('SE101', 2, 'major_required'),
+  ('SE102', 2, 'major_required'),
+  ('SE201', 2, 'major_required'),
+  ('SE202', 2, 'major_required'),
+  ('SE301', 2, 'major_required'),
+  ('SE302', 2, 'major_required'),
+  ('SE303', 2, 'major_required'),
+  ('SE304', 2, 'major_required'),
+  ('SE401', 2, 'major_required'),
+  ('SE402', 2, 'major_required'),
+  ('SE110', 2, 'major_required'),
+  ('SE111', 2, 'major_required'),
+  ('SE320', 2, 'major_required'),
+  ('SE340', 2, 'major_required'),
+  ('SE341', 2, 'major_required'),
+  ('SE410', 2, 'major_required'),
+
+  -- SE Major Elective
+  ('SE321',    2, 'major_elective'),
+  ('SE350',    2, 'major_elective'),
+  ('SE360',    2, 'major_elective'),
+  ('SEWEB1',   2, 'major_elective'),
+  ('SEWEB2',   2, 'major_elective'),
+  ('SEMOB1',   2, 'major_elective'),
+  ('SEMOB2',   2, 'major_elective'),
+  ('SECLOUD1', 2, 'major_elective'),
+  ('SECLOUD2', 2, 'major_elective');
+''');
+    // =========================
+    // 5. DEGREE PLAN - CE
+    // =========================
+    await connection.execute('''
+      INSERT INTO degree_plans (major_id, course_id, semester_number, is_mandatory) VALUES
+      (1, 'CE101',  1, true),
+      (1, 'CE102',  1, true),
+      (1, 'CE211',  1, true),
+      (1, 'MATH101',1, true),
+
+      (1, 'CE201',  2, true),
+      (1, 'CE220',  2, true),
+      (1, 'CE221',  2, true),
+      (1, 'MATH102',2, true),
+
+      (1, 'CE202',  3, true),
+      (1, 'CE210',  3, true),
+      (1, 'CS201',  3, true),
+
+      (1, 'CE301',  4, true),
+      (1, 'CE302',  4, true),
+      (1, 'CE311',  4, true),
+
+      (1, 'CE310',  5, true),
+      (1, 'CE320',  5, false),
+      (1, 'CE330',  5, false),
+
+      (1, 'CE331',  6, false),
+      (1, 'CE401',  6, true),
+      (1, 'CE402',  6, true),
+
+      (1, 'CE403',  7, true),
+      (1, 'CE500',  7, false),
+      (1, 'CE510',  7, false),
+
+      (1, 'CE404',  8, true),
+      (1, 'CE511',  8, false);
+    ''');
+
+    // =========================
+    // 6. DEGREE PLAN - SE
+    // =========================
+    await connection.execute('''
+      INSERT INTO degree_plans (major_id, course_id, semester_number, is_mandatory) VALUES
+      (2, 'SE101',  1, true),
+      (2, 'SE102',  1, true),
+      (2, 'MATH101',1, true),
+
+      (2, 'SE110',  2, true),
+      (2, 'SE111',  2, true),
+      (2, 'CS101',  2, true),
+
+      (2, 'SE201',  3, true),
+      (2, 'SE202',  3, true),
+
+      (2, 'SE302',  4, true),
+      (2, 'SE303',  4, true),
+      (2, 'SE320',  4, true),
+
+      (2, 'SE301',  5, true),
+      (2, 'SE304',  5, true),
+      (2, 'SE340',  5, true),
+      (2, 'SE341',  5, true),
+
+      (2, 'SE350',  6, false),
+      (2, 'SE360',  6, false),
+      (2, 'SE321',  6, false),
+
+      (2, 'SEWEB1',   7, false),
+      (2, 'SEMOB1',   7, false),
+      (2, 'SECLOUD1', 7, false),
+      (2, 'SE401',    7, true),
+
+      (2, 'SE402',    8, true),
+      (2, 'SE410',    8, true),
+      (2, 'SEWEB2',   8, false),
+      (2, 'SEMOB2',   8, false),
+      (2, 'SECLOUD2', 8, false);
+    ''');
+
+    // =========================
+    // 7. STUDENT DATA
+    // =========================
+    await connection.execute('''
+      INSERT INTO student_course_status (student_id, course_id, is_completed) VALUES
+      ('20210001', 'CS101',   true),
+      ('20210001', 'MATH101', true);
+    ''');
+
+    // FIX: total_credits كان 132 لكن الطالب في CE (162 credits)
+    await connection.execute('''
+      INSERT INTO student_stats (student_id, gpa, earned_credits, total_credits, major_id) VALUES
+      ('20210001', 3.85, 6, 162, 1);
+    ''');
+
+
+    await connection.execute('''
+  INSERT INTO student_grades (student_id, course_id, grade, semester) VALUES
+  ('20210001', 'CS101',   3.75, '1'),
+  ('20210001', 'MATH101', 2.50, '1');
+''');
+
+
+await seedCourseSchedules();
+await seedCourseDescriptions();
+  }
+
+
+
+
+}

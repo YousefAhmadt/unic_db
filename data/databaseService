@@ -1,0 +1,17 @@
+import 'package:postgres/postgres.dart';
+class DatabaseService{
+  Future<Connection> createConnection() async {
+  final conn =await Connection.open(
+      Endpoint(
+        host: 'dpg-d82dlrvavr4c73dp9p40-a',
+        database: 'unic_db',
+        username: 'unic_db_user',
+        password: 'FwyYl9a2GiSTsK1YAjQvdcUy15dFn3p4',
+        port: 5432,
+      ),
+      settings: const ConnectionSettings(sslMode: SslMode.disable),
+    );
+  return conn;
+}
+
+}

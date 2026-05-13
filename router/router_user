@@ -1,0 +1,78 @@
+import 'package:postgres/postgres.dart';
+Class CARD_User{
+  final Connection connection;
+
+  SetupDatabase(this.connection);
+    Future<Void> addUser() async {
+  final conn =await Connection.open(
+      Endpoint(
+        host: 'localhost',
+        database: 'unic_db',
+        username: 'postgres',
+        password: '123',
+        port: 5432,
+      ),
+      settings: const ConnectionSettings(sslMode: SslMode.disable),
+    );
+}
+}
+//     router.post('/api/admin/add-user', (Request request) async {
+      try {
+        final p = jsonDecode(await request.readAsString());
+
+        await connection.execute(
+          Sql.named(
+            'INSERT INTO users (id, name, email, password, role) VALUES (@id, @n, @e, @p, @r)',
+          ),
+          parameters: {
+            'id': p['id'],
+            'n': p['name'],
+            'e': p['email'],
+            'p': p['password'],
+            'r': p['role'],
+          },
+        );
+
+        if (p['role'] == 'student') {
+          final result = await connection.execute(
+            Sql.named('SELECT total_credits FROM majors WHERE id = @id'),
+            parameters: {'id': p['major_id'] ?? 1},
+          );
+
+          if (result.isEmpty) {
+            throw Exception('Major not found');
+          }
+
+          final earned = (p['earned_credits'] ?? 0) as int;
+          final totalFromMajor =
+              (result.first.toColumnMap()['total_credits'] as num).toInt();
+
+          final remainingCredits = totalFromMajor - earned;
+
+          await connection.execute(
+            Sql.named('''
+          INSERT INTO student_stats
+          (student_id, gpa, earned_credits, total_credits, major_id)
+          VALUES (@id, @gpa, @earned, @total, @major_id)
+        '''),
+            parameters: {
+              'id': p['id'],
+              'gpa': p['gpa'] ?? 0.0,
+              'earned': earned,
+              'total': remainingCredits, // ✅ الصحيح
+              'major_id': p['major_id'] ?? 1,
+            },
+          );
+        }
+
+        return Response.ok(
+          jsonEncode({'success': true}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      } catch (e) {
+        return Response.internalServerError(
+          body: jsonEncode({'error': e.toString()}),
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+    });
