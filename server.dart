@@ -170,7 +170,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -214,7 +215,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -242,7 +244,8 @@ class CourseServer {
         );
       } catch (e) {
         print('ADD MAJOR ERROR: $e');
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -305,7 +308,8 @@ class CourseServer {
         );
       } catch (e) {
         print('ADD TO DEGREE PLAN ERROR: $e');
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -329,7 +333,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -381,7 +386,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -403,7 +409,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -427,7 +434,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -449,7 +457,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -471,7 +480,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -511,7 +521,8 @@ class CourseServer {
         );
       } catch (e, stack) {
         print('STATS ERROR: $e\n$stack');
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -531,7 +542,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -564,7 +576,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -718,7 +731,8 @@ class CourseServer {
       } catch (e, stack) {
         print('CURRENT COURSES ERROR: $e\n$stack');
 
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -735,7 +749,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -762,7 +777,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -895,7 +911,8 @@ class CourseServer {
         );
       } catch (e, stack) {
         print('DEGREE PLAN ERROR: $e\n$stack');
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -985,7 +1002,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -1012,7 +1030,8 @@ class CourseServer {
         return d;
       } catch (e, stack) {
         print('DASHBOARD ERROR: $e\n$stack');
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -1087,7 +1106,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -1133,7 +1153,8 @@ class CourseServer {
         );
       } catch (e) {
         print('DELETE MAJOR ERROR: $e');
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -1294,7 +1315,8 @@ class CourseServer {
       } catch (e, stack) {
         print('REGISTER COURSE ERROR: $e\n$stack');
 
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
@@ -1397,7 +1419,8 @@ class CourseServer {
       } catch (e, stack) {
         print('GET REGISTERED COURSES ERROR: $e\n$stack');
 
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({
             'error': e.toString(),
           }),
