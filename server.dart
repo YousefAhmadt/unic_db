@@ -107,7 +107,8 @@ class CourseServer {
           headers: {'Content-Type': 'application/json'},
         );
       } catch (e) {
-        return Response.internalServerError(
+        return Response(
+          500,
           body: jsonEncode({'error': e.toString()}),
           headers: {'Content-Type': 'application/json'},
         );
