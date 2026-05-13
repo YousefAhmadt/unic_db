@@ -648,7 +648,8 @@ class Dashboard_Stats {
     } catch (e, stack) {
       print('DASHBOARD ERROR: $e\n$stack');
 
-      return Response.internalServerError(
+      return Response(
+  500,
         body: jsonEncode({'error': e.toString()}),
         headers: {'Content-Type': 'application/json'},
       );
